@@ -136,8 +136,7 @@ def generate_article(category: str, topic: str) -> dict:
     print("========== GEMINI RESPONSE ==========")
     print(raw)
     print("====================================")
-
-     return json.loads(raw)
+    return json.loads(raw)
      
 def write_post(article: dict, category: str, lang: str) -> Path:
     """Write a single-language post file"""
