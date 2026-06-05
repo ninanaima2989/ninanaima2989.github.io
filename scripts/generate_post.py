@@ -136,7 +136,14 @@ def generate_article(category: str, topic: str) -> dict:
     print("========== GEMINI RESPONSE ==========")
     print(raw)
     print("====================================")
-    return json.loads(raw)
+    try:
+        return json.loads(raw) 
+    except json.JSONDecodeError:     
+        print("❌ JSON broken, retrying...")    
+        # محاولة إصلاح بسيطة    
+        raw_fixed = raw + "}"  
+        return json.loads(raw_fixed)
+        
      
 def write_post(article: dict, category: str, lang: str) -> Path:
     """Write a single-language post file"""
