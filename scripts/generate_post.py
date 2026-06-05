@@ -1,39 +1,20 @@
 #!/usr/bin/env python3
 """
-Automatic blog post generator (EN, optionally AR)
+Automatic bilingual (EN/AR) blog post generator
 Topics: AI, Cybersecurity, Data Science
 Powered by Google Gemini API
-
-🔧 FIXED VERSION
----------------
-Strategy that avoids ALL previous errors:
-  1) FIRST call  -> small JSON only (title, excerpt, tags)   [response_mime_type=json]
-  2) SECOND call -> pure Markdown article (NOT inside JSON)  [plain text]
-  3) Optional 3rd call -> Arabic Markdown article
-
-Why this works:
-  - JSON stays tiny -> never truncated, never invalid
-  - Markdown is plain text -> no escaping headaches, no broken \\n
-  - Each call has its own try/except -> one failure doesn't crash everything
-  - Stable model: gemini-1.5-flash (or override via env var)
 """
-
 import os
 import sys
-import re
-import json
 import random
 import datetime
-import traceback
+import json
+import re
 from pathlib import Path
-
 from slugify import slugify
 import google.generativeai as genai
 
-
-# ============================================================
-# 1. CONFIGURATION
-# ============================================================
+# ===== Configuration =====
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     print("[ERROR] GEMINI_API_KEY not found in environment variables")
@@ -41,29 +22,16 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 
-# ✅ Stable model. Override with env var GEMINI_MODEL if needed.
-#    Recommended values (in order of preference):
-#      - gemini-1.5-flash         (most stable, free quota)
-#      - gemini-2.5-flash         (newer, also stable)
-#      - gemini-flash-latest      (auto-updated alias)
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-
-# Should we also generate Arabic? Default = False (English only).
-# Set env var GENERATE_ARABIC=1 to enable it.
-GENERATE_ARABIC = os.environ.get("GENERATE_ARABIC", "0") == "1"
-
+# Use stable model with fallback
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
     print(f"[INFO] Using model: {MODEL_NAME}")
 except Exception as e:
-    print(f"[WARN] Failed to load {MODEL_NAME} ({e}), falling back to gemini-1.5-flash")
-    MODEL_NAME = "gemini-1.5-flash"
-    MODEL = genai.GenerativeModel(MODEL_NAME)
+    print(f"[WARN] Failed to load {MODEL_NAME}, falling back to gemini-1.5-flash")
+    MODEL = genai.GenerativeModel("gemini-1.5-flash")
 
-
-# ============================================================
-# 2. TOPIC LIBRARY
-# ============================================================
+# ===== Topic library =====
 TOPICS = {
     "AI": [
         "Large Language Models advancements",
@@ -111,207 +79,120 @@ TOPICS = {
 
 
 def pick_topic():
-    """Randomly select category and topic."""
+    """Randomly select category and topic"""
     category = random.choice(list(TOPICS.keys()))
     topic = random.choice(TOPICS[category])
     return category, topic
 
 
-# ============================================================
-# 3. GEMINI CALLS
-# ============================================================
-def _strip_code_fences(text: str) -> str:
-    """Remove ```json ... ``` or ``` ... ``` wrappers if present."""
+def build_prompt(category: str, topic: str) -> str:
+    """Build the bilingual generation prompt"""
+    return f"""You are a senior technical writer specialized in {category}.
+Write a comprehensive bilingual blog post on this topic: "{topic}"
+
+Return STRICTLY a valid JSON object (no markdown fences, no commentary) with this exact schema:
+
+{{
+  "title_en": "Catchy English title, max 70 chars",
+  "title_ar": "عنوان جذاب بالعربية",
+  "excerpt_en": "1-2 sentence English summary",
+  "excerpt_ar": "ملخص قصير بالعربية من جملة أو جملتين",
+  "tags": ["tag1", "tag2", "tag3", "tag4"],
+  "content_en": "Full English Markdown article (800-1200 words) with: intro, 3-4 ## sections, at least one code example or practical example, bullet points, and a conclusion section",
+  "content_ar": "نفس المقال كاملا بالعربية بنفس البنية مع عناوين ## وأمثلة عملية ونقاط رئيسية وخاتمة"
+}}
+
+Constraints:
+- Use Markdown only inside content_en and content_ar fields
+- Do NOT escape newlines as \\n in the Markdown content (use real newlines, the JSON encoder will handle escaping)
+- Do NOT use triple backticks outside of code blocks
+- The Arabic content must be fluent and natural, not a literal translation
+- Include at least one practical, runnable code snippet relevant to {topic}
+"""
+
+
+def clean_json_response(text: str) -> str:
+    """Remove potential markdown fences around JSON"""
     text = text.strip()
-    text = re.sub(r"^```(?:json|markdown|md)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 
-def generate_metadata(category: str, topic: str) -> dict:
-    """
-    Call #1 — SMALL JSON only.
-    Returns: {title_en, excerpt_en, tags: [...]}
-    Why small? -> Gemini never truncates short JSON, so json.loads() is safe.
-    """
-    prompt = f"""You are a senior technical writer specialized in {category}.
-Topic: "{topic}"
-
-Return ONLY a valid JSON object (no markdown fences, no comments) with this exact schema:
-
-{{
-  "title_en": "Catchy English title, max 70 chars",
-  "excerpt_en": "1-2 sentence English summary, max 200 chars",
-  "tags": ["tag1", "tag2", "tag3", "tag4"]
-}}
-
-Rules:
-- Output JSON only, nothing else.
-- No newlines inside string values.
-- Use plain ASCII quotes.
-"""
+def generate_article(category: str, topic: str) -> dict:
+    """Call Gemini API and parse JSON response"""
+    prompt = build_prompt(category, topic)
     response = MODEL.generate_content(
         prompt,
         generation_config={
-            "temperature": 0.4,
-            "max_output_tokens": 512,            # tiny -> never truncated
+            "temperature": 0.85,
+            "max_output_tokens": 8192,
             "response_mime_type": "application/json",
         },
     )
-    raw = _strip_code_fences(response.text or "")
-    data = json.loads(raw)
-
-    # Validate
-    for key in ("title_en", "excerpt_en", "tags"):
-        if key not in data:
-            raise ValueError(f"Missing key '{key}' in metadata response")
-    if not isinstance(data["tags"], list) or not data["tags"]:
-        data["tags"] = [category]
-    return data
+    raw = clean_json_response(response.text)
+    return json.loads(raw)
 
 
-def generate_markdown_article(category: str, topic: str, title: str, lang: str = "en") -> str:
-    """
-    Call #2 — PURE MARKDOWN, no JSON wrapping.
-    Returns the article body as plain Markdown text.
-    """
-    if lang == "en":
-        prompt = f"""You are a senior technical writer in {category}.
-Write a comprehensive English Markdown blog post.
-
-Title: {title}
-Topic: {topic}
-
-Structure (use real Markdown, no JSON, no code fences around the whole thing):
-- A short introduction paragraph
-- 3 to 4 sections, each with a `##` heading
-- At least one practical, runnable code example inside a fenced code block (```language ... ```)
-- Bullet points where appropriate
-- A final `## Conclusion` section (2-4 sentences)
-
-Constraints:
-- 800-1200 words
-- Output Markdown ONLY (do NOT wrap the whole response in ``` fences)
-- Do NOT include front matter (---), I will add it myself
-- Do NOT repeat the title at the top
-"""
-    else:  # Arabic
-        prompt = f"""أنت كاتب تقني محترف متخصص في مجال {category}.
-اكتب مقالاً تقنياً شاملاً باللغة العربية بصيغة Markdown.
-
-العنوان: {title}
-الموضوع: {topic}
-
-البنية المطلوبة:
-- فقرة مقدمة قصيرة
-- 3 إلى 4 أقسام، كل قسم يبدأ بـ `##`
-- مثال برمجي عملي واحد على الأقل داخل كتلة كود ```لغة ... ```
-- نقاط مرقمة عند الحاجة
-- قسم أخير `## الخاتمة` (2-4 جمل)
-
-قيود:
-- 800-1200 كلمة
-- مخرجات Markdown فقط (لا تُغلِّف الرد كله بـ ``` fences)
-- لا تُضِف front matter (---)، سأضيفها بنفسي
-- لا تُكرر العنوان في الأعلى
-"""
-    response = MODEL.generate_content(
-        prompt,
-        generation_config={
-            "temperature": 0.6,
-            "max_output_tokens": 4096,           # enough for ~1200 words
-            # NO response_mime_type -> we want plain text
-        },
-    )
-    text = response.text or ""
-    # Some models occasionally wrap the whole thing in ```markdown fences. Strip those.
-    text = _strip_code_fences(text)
-    if not text.strip():
-        raise ValueError(f"Empty Markdown response for lang={lang}")
-    return text
-
-
-# ============================================================
-# 4. FILE WRITING
-# ============================================================
-def write_post(title: str, excerpt: str, tags: list, content: str,
-               category: str, lang: str, slug: str) -> Path:
-    """Write a single-language post file in _posts/."""
+def write_post(article: dict, category: str, lang: str) -> Path:
+    """Write a single-language post file"""
     today = datetime.date.today().isoformat()
+    title = article[f"title_{lang}"]
+    content = article[f"content_{lang}"]
+    excerpt = article[f"excerpt_{lang}"]
+    slug = slugify(article["title_en"])[:60] or "post"
+
     filename = f"{today}-{slug}-{lang}.md"
     filepath = Path("_posts") / filename
     filepath.parent.mkdir(exist_ok=True)
 
-    # Escape problematic chars for YAML front matter
-    safe_title = title.replace('"', "'").replace("\n", " ").strip()
-    safe_excerpt = excerpt.replace('"', "'").replace("\n", " ").strip()
-    tags_yaml = "\n".join([f"  - {t}" for t in tags])
+    # Escape quotes for YAML
+    safe_title = title.replace('"', "'").replace("\n", " ")
+    safe_excerpt = excerpt.replace('"', "'").replace("\n", " ")
 
-    front_matter = (
-        "---\n"
-        "layout: post\n"
-        f'title: "{safe_title}"\n'
-        f"date: {today} 12:00:00 +0000\n"
-        f"categories: [{category}]\n"
-        "tags:\n"
-        f"{tags_yaml}\n"
-        f"lang: {lang}\n"
-        f'excerpt: "{safe_excerpt}"\n'
-        "---\n\n"
-    )
+    tags_yaml = "\n".join([f"  - {t}" for t in article.get("tags", [])])
 
-    filepath.write_text(front_matter + content.strip() + "\n", encoding="utf-8")
+    front_matter = f"""---
+layout: post
+title: "{safe_title}"
+date: {today} 12:00:00 +0000
+categories: [{category}]
+tags:
+{tags_yaml}
+lang: {lang}
+excerpt: "{safe_excerpt}"
+---
+
+{content}
+"""
+    filepath.write_text(front_matter, encoding="utf-8")
     print(f"[OK] Created: {filepath}")
     return filepath
 
 
-# ============================================================
-# 5. MAIN
-# ============================================================
 def main():
     category, topic = pick_topic()
     print(f"[INFO] Category: {category} | Topic: {topic}")
 
-    # --- Step 1: metadata (small JSON) ---
     try:
-        meta = generate_metadata(category, topic)
-        print(f"[OK] Metadata generated: {meta['title_en']}")
+        article = generate_article(category, topic)
     except json.JSONDecodeError as e:
-        print(f"[ERROR] Invalid JSON in metadata: {e}")
+        print(f"[ERROR] Invalid JSON from Gemini: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"[ERROR] Metadata generation failed: {e}")
-        traceback.print_exc()
+        print(f"[ERROR] Gemini API call failed: {e}")
         sys.exit(1)
 
-    title_en = meta["title_en"]
-    excerpt_en = meta["excerpt_en"]
-    tags = meta["tags"]
-    slug = (slugify(title_en)[:60] or "post")
-
-    # --- Step 2: English Markdown ---
-    try:
-        content_en = generate_markdown_article(category, topic, title_en, lang="en")
-        print(f"[OK] English article generated ({len(content_en)} chars)")
-    except Exception as e:
-        print(f"[ERROR] English article generation failed: {e}")
-        traceback.print_exc()
+    # Validate required fields
+    required = ["title_en", "title_ar", "excerpt_en", "excerpt_ar",
+                "content_en", "content_ar", "tags"]
+    missing = [f for f in required if f not in article]
+    if missing:
+        print(f"[ERROR] Missing fields in response: {missing}")
         sys.exit(1)
 
-    write_post(title_en, excerpt_en, tags, content_en, category, "en", slug)
-
-    # --- Step 3: Arabic Markdown (OPTIONAL) ---
-    if GENERATE_ARABIC:
-        try:
-            content_ar = generate_markdown_article(category, topic, title_en, lang="ar")
-            print(f"[OK] Arabic article generated ({len(content_ar)} chars)")
-            # Reuse English excerpt/title for simplicity; you can also ask Gemini for Arabic versions.
-            # Here we keep tags + same title, mark lang=ar.
-            write_post(title_en, excerpt_en, tags, content_ar, category, "ar", slug)
-        except Exception as e:
-            # ❗ Arabic failure does NOT kill the workflow.
-            print(f"[WARN] Arabic article skipped due to error: {e}")
-
+    write_post(article, category, "en")
+    write_post(article, category, "ar")
     print("[SUCCESS] Generation completed successfully!")
 
 
