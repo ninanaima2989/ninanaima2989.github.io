@@ -23,7 +23,7 @@ if not API_KEY:
 genai.configure(api_key=API_KEY)
 
 # Use stable model with fallback
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
     print(f"[INFO] Using model: {MODEL_NAME}")
