@@ -85,28 +85,28 @@ def pick_topic():
 
 
 def build_prompt(category: str, topic: str) -> str:
-    """Build the bilingual generation prompt"""
-    return f"""You are a senior technical writer specialized in {category}.
-Write a comprehensive bilingual blog post on this topic: "{topic}"
+    return f"""
+You are a senior technical writer.
 
-Return STRICTLY a valid JSON object (no markdown fences, no commentary) with this exact schema:
+Write ONLY a valid JSON object with NO markdown, NO extra text.
+
+Return this structure ONLY:
 
 {{
-  "title_en": "Catchy English title, max 70 chars",
-  "title_ar": "عنوان جذاب بالعربية",
-  "excerpt_en": "1-2 sentence English summary",
-  "excerpt_ar": "ملخص قصير بالعربية من جملة أو جملتين",
-  "tags": ["tag1", "tag2", "tag3", "tag4"],
-  "content_en": "Full English Markdown article (600-800 words) with: intro, 3-4 ## sections, at least one code example or practical example, bullet points, and a conclusion section",
-  "content_ar": "نفس المقال كاملا بالعربية بنفس البنية مع عناوين ## وأمثلة عملية ونقاط رئيسية وخاتمة"
+  "title_en": "...",
+  "title_ar": "...",
+  "excerpt_en": "...",
+  "excerpt_ar": "...",
+  "tags": ["tag1", "tag2", "tag3"]
 }}
 
-Constraints:
-- Use Markdown only inside content_en and content_ar fields
-- Do NOT escape newlines as \\n in the Markdown content (use real newlines, the JSON encoder will handle escaping)
-- Do NOT use triple backticks outside of code blocks
-- The Arabic content must be fluent and natural, not a literal translation
-- Include at least one practical, runnable code snippet relevant to {topic}
+Topic: {topic}
+Category: {category}
+
+Rules:
+- No long articles
+- No content field
+- JSON only
 """
 
 
@@ -138,18 +138,29 @@ def generate_article(category: str, topic: str) -> dict:
     print("====================================")
     try:
         return json.loads(raw) 
-    except json.JSONDecodeError:     
-        print("❌ JSON broken, retrying...")    
-        # محاولة إصلاح بسيطة    
-        raw_fixed = raw + "}"  
-        return json.loads(raw_fixed)
-        
+    
+
+
+def generate_content(category: str, topic: str, lang: str) -> str:
+    prompt = f"""
+Write a detailed blog post in {lang} about: {topic}
+
+Rules:
+- 600 to 800 words
+- Include sections with ##
+- Include one code example if relevant
+- Do NOT output JSON
+- Only plain Markdown text
+"""
+
+    response = MODEL.generate_content(prompt)
+    return response.text
      
 def write_post(article: dict, category: str, lang: str) -> Path:
     """Write a single-language post file"""
     today = datetime.date.today().isoformat()
     title = article[f"title_{lang}"]
-    content = article[f"content_{lang}"]
+    content = content_en if lang == "en" else content_ar
     excerpt = article[f"excerpt_{lang}"]
     slug = slugify(article["title_en"])[:60] or "post"
 
@@ -182,30 +193,19 @@ excerpt: "{safe_excerpt}"
 
 
 def main():
+    
     category, topic = pick_topic()
     print(f"[INFO] Category: {category} | Topic: {topic}")
 
-    try:
-        article = generate_article(category, topic)
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Invalid JSON from Gemini: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"[ERROR] Gemini API call failed: {e}")
-        sys.exit(1)
+    article = generate_article(category, topic)
 
-    # Validate required fields
-    required = ["title_en", "title_ar", "excerpt_en", "excerpt_ar",
-                "content_en", "content_ar", "tags"]
-    missing = [f for f in required if f not in article]
-    if missing:
-        print(f"[ERROR] Missing fields in response: {missing}")
-        sys.exit(1)
+    content_en = generate_content(category, topic, "English")
+    content_ar = generate_content(category, topic, "Arabic")
 
-    write_post(article, category, "en")
-    write_post(article, category, "ar")
-    print("[SUCCESS] Generation completed successfully!")
+    write_post(article | {"content_en": content_en, "content_ar": content_ar}, category, "en")
+    write_post(article | {"content_en": content_en, "content_ar": content_ar}, category, "ar")
 
+    print("[SUCCESS] Done!")
 
 if __name__ == "__main__":
     main()
