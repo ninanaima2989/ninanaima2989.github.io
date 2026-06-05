@@ -12,7 +12,7 @@ import json
 import re
 from pathlib import Path
 from slugify import slugify
-import google.generativeai as genai
+from google import genai
 
 # ===== Configuration =====
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -23,13 +23,13 @@ if not API_KEY:
 genai.configure(api_key=API_KEY)
 
 # Use stable model with fallback
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
     print(f"[INFO] Using model: {MODEL_NAME}")
 except Exception as e:
     print(f"[WARN] Failed to load {MODEL_NAME}, falling back to gemini-1.5-flash")
-    MODEL = genai.GenerativeModel("gemini-1.5-flash")
+    MODEL = genai.GenerativeModel("gemini-2.5-flash")
 
 # ===== Topic library =====
 TOPICS = {
