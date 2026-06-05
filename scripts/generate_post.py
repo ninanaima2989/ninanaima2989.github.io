@@ -29,8 +29,7 @@ try:
     print(f"[INFO] Using model: {MODEL_NAME}")
 except Exception as e:
     print(f"[WARN] Failed to load {MODEL_NAME}, falling back to gemini-1.5-flash")
-    MODEL = genai.GenerativeModel("gemini-1.5-flash")
-
+    MODEL = genai.GenerativeModel("gemini-2.5-flash")
 # ===== Topic library =====
 TOPICS = {
     "AI": [
