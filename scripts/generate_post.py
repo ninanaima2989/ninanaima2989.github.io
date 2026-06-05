@@ -23,7 +23,7 @@ if not API_KEY:
 genai.configure(api_key=API_KEY)
 
 # Use stable model with fallback
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 try:
     MODEL = genai.GenerativeModel(MODEL_NAME)
     print(f"[INFO] Using model: {MODEL_NAME}")
@@ -118,28 +118,41 @@ def clean_json_response(text: str) -> str:
     return text.strip()
 
 
-def generate_article(category: str, topic: str) -> dict:
-    """Call Gemini API and parse JSON response"""
-    prompt = build_prompt(category, topic)
-    response = MODEL.generate_content(
-        prompt,
-        generation_config={
-            "temperature": 0.85,
-            "max_output_tokens": 4096,
-            "response_mime_type": "application/json",
-        },
-    )
-   
+def write_post(article: dict, category: str, lang: str) -> Path:
+    today = datetime.date.today().isoformat()
 
-    raw = clean_json_response(response.text)
+    title = article[f"title_{lang}"]
+    excerpt = article[f"excerpt_{lang}"]
+    content = article["content_en"] if lang == "en" else article["content_ar"]
 
-    print("========== GEMINI RESPONSE ==========")
-    print(raw)
-    print("====================================")
-    try:
-        return json.loads(raw) 
-    
+    slug = slugify(article["title_en"])[:60] or "post"
 
+    filename = f"{today}-{slug}-{lang}.md"
+    filepath = Path("_posts") / filename
+    filepath.parent.mkdir(exist_ok=True)
+
+    safe_title = title.replace('"', "'").replace("\n", " ")
+    safe_excerpt = excerpt.replace('"', "'").replace("\n", " ")
+
+    tags_yaml = "\n".join([f"  - {t}" for t in article.get("tags", [])])
+
+    front_matter = f"""---
+layout: post
+title: "{safe_title}"
+date: {today} 12:00:00 +0000
+categories: [{category}]
+tags:
+{tags_yaml}
+lang: {lang}
+excerpt: "{safe_excerpt}"
+---
+
+{content}
+"""
+
+    filepath.write_text(front_matter, encoding="utf-8")
+    print(f"[OK] Created: {filepath}")
+    return filepath
 
 def generate_content(category: str, topic: str, lang: str) -> str:
     prompt = f"""
@@ -160,7 +173,7 @@ def write_post(article: dict, category: str, lang: str) -> Path:
     """Write a single-language post file"""
     today = datetime.date.today().isoformat()
     title = article[f"title_{lang}"]
-    content = content_en if lang == "en" else content_ar
+    content = article["content_en"] if lang == "en" else article["content_ar"]
     excerpt = article[f"excerpt_{lang}"]
     slug = slugify(article["title_en"])[:60] or "post"
 
@@ -193,11 +206,18 @@ excerpt: "{safe_excerpt}"
 
 
 def main():
-    
+
     category, topic = pick_topic()
     print(f"[INFO] Category: {category} | Topic: {topic}")
 
-    article = generate_article(category, topic)
+    try:
+        article = generate_article(category, topic)
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Invalid JSON from Gemini: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Gemini API call failed: {e}")
+        sys.exit(1)
 
     content_en = generate_content(category, topic, "English")
     content_ar = generate_content(category, topic, "Arabic")
@@ -205,7 +225,7 @@ def main():
     write_post(article | {"content_en": content_en, "content_ar": content_ar}, category, "en")
     write_post(article | {"content_en": content_en, "content_ar": content_ar}, category, "ar")
 
-    print("[SUCCESS] Done!")
+    print("[SUCCESS] Generation completed successfully!")
 
 if __name__ == "__main__":
     main()
