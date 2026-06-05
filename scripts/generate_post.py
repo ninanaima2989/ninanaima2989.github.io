@@ -97,7 +97,7 @@ Return STRICTLY a valid JSON object (no markdown fences, no commentary) with thi
   "excerpt_en": "1-2 sentence English summary",
   "excerpt_ar": "ملخص قصير بالعربية من جملة أو جملتين",
   "tags": ["tag1", "tag2", "tag3", "tag4"],
-  "content_en": "Full English Markdown article (800-1200 words) with: intro, 3-4 ## sections, at least one code example or practical example, bullet points, and a conclusion section",
+  "content_en": "Full English Markdown article (600-800 words) with: intro, 3-4 ## sections, at least one code example or practical example, bullet points, and a conclusion section",
   "content_ar": "نفس المقال كاملا بالعربية بنفس البنية مع عناوين ## وأمثلة عملية ونقاط رئيسية وخاتمة"
 }}
 
@@ -125,7 +125,7 @@ def generate_article(category: str, topic: str) -> dict:
         prompt,
         generation_config={
             "temperature": 0.85,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 4096,
             "response_mime_type": "application/json",
         },
     )
