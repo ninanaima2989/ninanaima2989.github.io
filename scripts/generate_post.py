@@ -129,10 +129,16 @@ def generate_article(category: str, topic: str) -> dict:
             "response_mime_type": "application/json",
         },
     )
+   
+
     raw = clean_json_response(response.text)
-    return json.loads(raw)
 
+    print("========== GEMINI RESPONSE ==========")
+    print(raw)
+    print("====================================")
 
+     return json.loads(raw)
+     
 def write_post(article: dict, category: str, lang: str) -> Path:
     """Write a single-language post file"""
     today = datetime.date.today().isoformat()
