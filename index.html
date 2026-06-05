@@ -1,0 +1,39 @@
+---
+layout: default
+title: Home
+---
+
+<section class="hero">
+  <h1>🤖 AI · 🔒 Cybersecurity · 📊 Data Science</h1>
+  <p class="tagline">Daily AI-generated insights | مقالات يومية ثنائية اللغة</p>
+</section>
+
+<section class="posts">
+  <h2>Latest Posts | أحدث المقالات</h2>
+  <ul class="post-list">
+    {% for post in paginator.posts %}
+      <li class="post-item" lang="{{ post.lang }}" {% if post.lang == 'ar' %}dir="rtl"{% endif %}>
+        <div class="post-meta">
+          <span class="date">📅 {{ post.date | date: "%Y-%m-%d" }}</span>
+          <span class="category">🏷️ {{ post.categories | join: ", " }}</span>
+          <span class="lang-badge lang-{{ post.lang }}">{{ post.lang | upcase }}</span>
+        </div>
+        <h3><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h3>
+        <p class="excerpt">{{ post.excerpt | strip_html | truncate: 200 }}</p>
+        <a class="read-more" href="{{ post.url | relative_url }}">Read more →</a>
+      </li>
+    {% endfor %}
+  </ul>
+
+  {% if paginator.total_pages > 1 %}
+    <nav class="pagination">
+      {% if paginator.previous_page %}
+        <a href="{{ paginator.previous_page_path | relative_url }}">← Previous</a>
+      {% endif %}
+      <span>Page {{ paginator.page }} / {{ paginator.total_pages }}</span>
+      {% if paginator.next_page %}
+        <a href="{{ paginator.next_page_path | relative_url }}">Next →</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+</section>
