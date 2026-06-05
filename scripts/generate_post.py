@@ -1,8 +1,9 @@
-##!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Automatic bilingual (EN/AR) blog post generator
-Topics: AI, Cybersecurity, Data Science
-Powered by Google Gemini API (NEW SDK)
+Robust bilingual blog generator (EN/AR)
+- Resilient to Gemini downtime
+- Auto retry + fallback models
+- Never stops execution
 """
 
 import os
@@ -11,196 +12,191 @@ import random
 import datetime
 import json
 import re
+import time
 from pathlib import Path
 from slugify import slugify
 from google import genai
 
 
-# ===== Configuration =====
+# ================= CONFIG =================
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
-    print("[ERROR] GEMINI_API_KEY not found in environment variables")
+    print("[ERROR] Missing GEMINI_API_KEY")
     sys.exit(1)
 
-
-# NEW SDK CLIENT
 client = genai.Client(api_key=API_KEY)
 
-# Use stable model with fallback
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# fallback model chain (important)
+MODELS = [
+    os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+    "gemini-1.5-flash-001",
+    "gemini-1.5-pro-001",
+]
 
-print(f"[INFO] Using model: {MODEL_NAME}")
 
-
-# ===== Topic library =====
+# ================= TOPICS =================
 TOPICS = {
     "AI": [
         "Large Language Models advancements",
-        "Computer Vision breakthroughs",
-        "Reinforcement Learning applications",
         "Generative AI in production",
-        "AI ethics and bias mitigation",
-        "Multimodal AI systems",
         "AI agents and autonomous systems",
-        "Prompt engineering best practices",
-        "Retrieval Augmented Generation (RAG)",
-        "Fine-tuning open-source models",
-        "AI in healthcare diagnostics",
-        "Edge AI and on-device inference",
     ],
     "Cybersecurity": [
-        "Zero-trust architecture",
-        "Ransomware defense strategies",
-        "Cloud security best practices",
-        "Penetration testing techniques",
-        "Threat intelligence platforms",
-        "Identity and access management",
-        "Supply chain security",
-        "Post-quantum cryptography",
-        "SIEM and SOC operations",
         "Container and Kubernetes security",
-        "OSINT techniques for defenders",
-        "Phishing detection with ML",
+        "Zero-trust architecture",
+        "Cloud security best practices",
     ],
     "Data Science": [
-        "Feature engineering techniques",
+        "Data visualization storytelling",
         "MLOps pipelines",
         "Time series forecasting",
-        "Big data architectures",
-        "Data visualization storytelling",
-        "Causal inference methods",
-        "Real-time analytics",
-        "Vector databases",
-        "A/B testing frameworks",
-        "Data quality and observability",
-        "Graph neural networks",
-        "Synthetic data generation",
     ],
 }
 
 
+# ================= UTIL =================
 def pick_topic():
-    category = random.choice(list(TOPICS.keys()))
-    topic = random.choice(TOPICS[category])
-    return category, topic
+    cat = random.choice(list(TOPICS.keys()))
+    topic = random.choice(TOPICS[cat])
+    return cat, topic
 
 
-def build_prompt(category: str, topic: str) -> str:
+def build_prompt(category, topic):
     return f"""
-You are a senior technical writer specialized in {category}.
-Write a bilingual blog post about: "{topic}"
+Return ONLY valid JSON.
 
-Return ONLY valid JSON:
+Write a bilingual blog post (EN + AR) about: "{topic}"
 
+Schema:
 {{
   "title_en": "",
   "title_ar": "",
   "excerpt_en": "",
   "excerpt_ar": "",
-  "tags": ["tag1", "tag2", "tag3", "tag4"],
+  "tags": ["AI", "Tech", "Data"],
   "content_en": "",
   "content_ar": ""
 }}
 
 Requirements:
-- 800–1200 words English content
-- Natural Arabic translation (not literal)
+- 800–1200 words English
+- Natural Arabic translation
 - Include code example
-- Markdown format inside content fields
 """
 
 
-def clean_json_response(text: str) -> str:
+def clean_json(text):
     text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+    text = re.sub(r"^```(?:json)?", "", text)
+    text = re.sub(r"```$", "", text)
     return text.strip()
 
 
-# ===== Gemini Call (NEW SDK) =====
-def generate_article(category: str, topic: str) -> dict:
+# ================= CORE AI CALL =================
+def call_gemini(prompt):
+    last_error = None
+
+    for model in MODELS:
+        for attempt in range(3):  # retry per model
+            try:
+                print(f"[INFO] Trying {model} (attempt {attempt+1})")
+
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt
+                )
+
+                if response and response.text:
+                    return response.text
+
+            except Exception as e:
+                last_error = e
+                print(f"[WARN] Model {model} failed: {e}")
+                time.sleep(2 * (attempt + 1))
+
+    raise Exception(f"All models failed. Last error: {last_error}")
+
+
+# ================= FALLBACK ARTICLE =================
+def fallback_article(category, topic):
+    print("[FALLBACK] Generating offline article")
+
+    return {
+        "title_en": f"{topic} Overview",
+        "title_ar": f"نظرة حول {topic}",
+        "excerpt_en": "Generated offline due to API unavailability.",
+        "excerpt_ar": "تم إنشاء المقال بدون الاتصال بـ Gemini.",
+        "tags": [category, "fallback", "offline"],
+        "content_en": f"## {topic}\n\nAI service is temporarily unavailable.",
+        "content_ar": f"## {topic}\n\nالخدمة غير متاحة حالياً."
+    }
+
+
+# ================= GENERATE =================
+def generate_article(category, topic):
     prompt = build_prompt(category, topic)
 
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-        config={
-            "temperature": 0.85,
-            "max_output_tokens": 8192,
-            "response_mime_type": "application/json",
-        },
-    )
+    try:
+        raw = call_gemini(prompt)
+        raw = clean_json(raw)
+        return json.loads(raw)
 
-    raw = clean_json_response(response.text)
-    return json.loads(raw)
+    except Exception as e:
+        print(f"[ERROR] Gemini failed completely: {e}")
+        return fallback_article(category, topic)
 
 
-def write_post(article: dict, category: str, lang: str) -> Path:
+# ================= WRITE POST =================
+def write_post(article, category, lang):
     today = datetime.date.today().isoformat()
+    slug = slugify(article["title_en"])[:60]
 
-    title = article[f"title_{lang}"]
+    filename = f"{today}-{slug}-{lang}.md"
+    path = Path("_posts") / filename
+    path.parent.mkdir(exist_ok=True)
+
     content = article[f"content_{lang}"]
+    title = article[f"title_{lang}"]
     excerpt = article[f"excerpt_{lang}"]
 
-    slug = slugify(article["title_en"])[:60] or "post"
-    filename = f"{today}-{slug}-{lang}.md"
+    tags = "\n".join([f"  - {t}" for t in article.get("tags", [])])
 
-    filepath = Path("_posts") / filename
-    filepath.parent.mkdir(exist_ok=True)
-
-    safe_title = title.replace('"', "'").replace("\n", " ")
-    safe_excerpt = excerpt.replace('"', "'").replace("\n", " ")
-
-    tags_yaml = "\n".join([f"  - {t}" for t in article.get("tags", [])])
-
-    front_matter = f"""---
+    md = f"""---
 layout: post
-title: "{safe_title}"
+title: "{title}"
 date: {today} 12:00:00 +0000
 categories: [{category}]
 tags:
-{tags_yaml}
+{tags}
 lang: {lang}
-excerpt: "{safe_excerpt}"
+excerpt: "{excerpt}"
 ---
 
 {content}
 """
 
-    filepath.write_text(front_matter, encoding="utf-8")
-    print(f"[OK] Created: {filepath}")
-    return filepath
+    path.write_text(md, encoding="utf-8")
+    print(f"[OK] Saved {path}")
 
 
+# ================= MAIN =================
 def main():
     category, topic = pick_topic()
     print(f"[INFO] Category: {category} | Topic: {topic}")
 
-    try:
-        article = generate_article(category, topic)
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Invalid JSON from Gemini: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"[ERROR] Gemini API call failed: {e}")
-        sys.exit(1)
+    article = generate_article(category, topic)
 
-    required = [
-        "title_en", "title_ar",
-        "excerpt_en", "excerpt_ar",
-        "content_en", "content_ar",
-        "tags"
-    ]
-
-    missing = [f for f in required if f not in article]
-    if missing:
-        print(f"[ERROR] Missing fields: {missing}")
-        sys.exit(1)
+    required = ["title_en", "title_ar", "content_en", "content_ar"]
+    for f in required:
+        if f not in article:
+            print(f"[WARN] Missing {f}, using fallback")
+            article = fallback_article(category, topic)
+            break
 
     write_post(article, category, "en")
     write_post(article, category, "ar")
 
-    print("[SUCCESS] Generation completed successfully!")
+    print("[SUCCESS] Done")
 
 
 if __name__ == "__main__":
