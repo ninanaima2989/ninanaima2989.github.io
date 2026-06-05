@@ -1,9 +1,10 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 """
 Automatic bilingual (EN/AR) blog post generator
 Topics: AI, Cybersecurity, Data Science
-Powered by Google Gemini API
+Powered by Google Gemini API (NEW SDK)
 """
+
 import os
 import sys
 import random
@@ -14,22 +15,22 @@ from pathlib import Path
 from slugify import slugify
 from google import genai
 
+
 # ===== Configuration =====
 API_KEY = os.environ.get("GEMINI_API_KEY")
 if not API_KEY:
     print("[ERROR] GEMINI_API_KEY not found in environment variables")
     sys.exit(1)
 
-genai.configure(api_key=API_KEY)
+
+# NEW SDK CLIENT
+client = genai.Client(api_key=API_KEY)
 
 # Use stable model with fallback
 MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-try:
-    MODEL = genai.GenerativeModel(MODEL_NAME)
-    print(f"[INFO] Using model: {MODEL_NAME}")
-except Exception as e:
-    print(f"[WARN] Failed to load {MODEL_NAME}, falling back to gemini-1.5-flash")
-    MODEL = genai.GenerativeModel("gemini-2.5-flash")
+
+print(f"[INFO] Using model: {MODEL_NAME}")
+
 
 # ===== Topic library =====
 TOPICS = {
@@ -79,74 +80,74 @@ TOPICS = {
 
 
 def pick_topic():
-    """Randomly select category and topic"""
     category = random.choice(list(TOPICS.keys()))
     topic = random.choice(TOPICS[category])
     return category, topic
 
 
 def build_prompt(category: str, topic: str) -> str:
-    """Build the bilingual generation prompt"""
-    return f"""You are a senior technical writer specialized in {category}.
-Write a comprehensive bilingual blog post on this topic: "{topic}"
+    return f"""
+You are a senior technical writer specialized in {category}.
+Write a bilingual blog post about: "{topic}"
 
-Return STRICTLY a valid JSON object (no markdown fences, no commentary) with this exact schema:
+Return ONLY valid JSON:
 
 {{
-  "title_en": "Catchy English title, max 70 chars",
-  "title_ar": "عنوان جذاب بالعربية",
-  "excerpt_en": "1-2 sentence English summary",
-  "excerpt_ar": "ملخص قصير بالعربية من جملة أو جملتين",
+  "title_en": "",
+  "title_ar": "",
+  "excerpt_en": "",
+  "excerpt_ar": "",
   "tags": ["tag1", "tag2", "tag3", "tag4"],
-  "content_en": "Full English Markdown article (800-1200 words) with: intro, 3-4 ## sections, at least one code example or practical example, bullet points, and a conclusion section",
-  "content_ar": "نفس المقال كاملا بالعربية بنفس البنية مع عناوين ## وأمثلة عملية ونقاط رئيسية وخاتمة"
+  "content_en": "",
+  "content_ar": ""
 }}
 
-Constraints:
-- Use Markdown only inside content_en and content_ar fields
-- Do NOT escape newlines as \\n in the Markdown content (use real newlines, the JSON encoder will handle escaping)
-- Do NOT use triple backticks outside of code blocks
-- The Arabic content must be fluent and natural, not a literal translation
-- Include at least one practical, runnable code snippet relevant to {topic}
+Requirements:
+- 800–1200 words English content
+- Natural Arabic translation (not literal)
+- Include code example
+- Markdown format inside content fields
 """
 
 
 def clean_json_response(text: str) -> str:
-    """Remove potential markdown fences around JSON"""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 
+# ===== Gemini Call (NEW SDK) =====
 def generate_article(category: str, topic: str) -> dict:
-    """Call Gemini API and parse JSON response"""
     prompt = build_prompt(category, topic)
-    response = MODEL.generate_content(
-        prompt,
-        generation_config={
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+        config={
             "temperature": 0.85,
             "max_output_tokens": 8192,
             "response_mime_type": "application/json",
         },
     )
+
     raw = clean_json_response(response.text)
     return json.loads(raw)
 
 
 def write_post(article: dict, category: str, lang: str) -> Path:
-    """Write a single-language post file"""
     today = datetime.date.today().isoformat()
+
     title = article[f"title_{lang}"]
     content = article[f"content_{lang}"]
     excerpt = article[f"excerpt_{lang}"]
-    slug = slugify(article["title_en"])[:60] or "post"
 
+    slug = slugify(article["title_en"])[:60] or "post"
     filename = f"{today}-{slug}-{lang}.md"
+
     filepath = Path("_posts") / filename
     filepath.parent.mkdir(exist_ok=True)
 
-    # Escape quotes for YAML
     safe_title = title.replace('"', "'").replace("\n", " ")
     safe_excerpt = excerpt.replace('"', "'").replace("\n", " ")
 
@@ -165,6 +166,7 @@ excerpt: "{safe_excerpt}"
 
 {content}
 """
+
     filepath.write_text(front_matter, encoding="utf-8")
     print(f"[OK] Created: {filepath}")
     return filepath
@@ -183,19 +185,23 @@ def main():
         print(f"[ERROR] Gemini API call failed: {e}")
         sys.exit(1)
 
-    # Validate required fields
-    required = ["title_en", "title_ar", "excerpt_en", "excerpt_ar",
-                "content_en", "content_ar", "tags"]
+    required = [
+        "title_en", "title_ar",
+        "excerpt_en", "excerpt_ar",
+        "content_en", "content_ar",
+        "tags"
+    ]
+
     missing = [f for f in required if f not in article]
     if missing:
-        print(f"[ERROR] Missing fields in response: {missing}")
+        print(f"[ERROR] Missing fields: {missing}")
         sys.exit(1)
 
     write_post(article, category, "en")
     write_post(article, category, "ar")
+
     print("[SUCCESS] Generation completed successfully!")
 
 
 if __name__ == "__main__":
     main()
-
